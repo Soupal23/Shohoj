@@ -1,0 +1,4 @@
+sarvamai
+gradio
+python-dotenv
+requests
