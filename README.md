@@ -145,7 +145,7 @@ User Listens to the Answer
 ### 1. Clone the Repository
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/shohoj.git
+git clone https://github.com/Soupal23/shohoj.git
 cd shohoj
 ```
 
