@@ -7,7 +7,6 @@ import mimetypes
 import zipfile
 import io
 import requests
-
 import gradio as gr
 from dotenv import load_dotenv
 from sarvamai import SarvamAI
@@ -22,7 +21,7 @@ client = SarvamAI(api_subscription_key=api_key)
 
 
 def extract_document_text(file_path, document_language):
-    """Extract the text from an uploaded PDF or image using Sarvam Document AI."""
+    """Extract text from an uploaded PDF or image using Sarvam Document AI."""
 
     if not file_path:
         raise ValueError(
@@ -90,7 +89,7 @@ def extract_document_text(file_path, document_language):
                 "OCR completed, but no text file was found in the result."
             )
 
-        # Prefer the Markdown document, which preserves structure.
+        # Prefer Markdown, which preserves document structure.
         text_files.sort(
             key=lambda name: (
                 not name.lower().endswith(".md"),
@@ -110,7 +109,13 @@ def extract_document_text(file_path, document_language):
     return extracted_text
 
 
-def voice_bot(audio_path, document_path, document_language, response_language):
+def voice_bot(
+    audio_path,
+    document_path,
+    document_language,
+    input_language,
+    response_language
+):
     if document_path is None:
         return (
             "Please upload a government form first. / "
@@ -128,17 +133,17 @@ def voice_bot(audio_path, document_path, document_language, response_language):
         )
 
     try:
-        # Step 1: Read the uploaded government document.
+        # Step 1: Extract text from the uploaded government document.
         form_text = extract_document_text(
             document_path, document_language
         )
 
-        # Step 2: Transcribe the user's voice.
+        # Step 2: Transcribe the user's voice in the selected language.
         with open(audio_path, "rb") as audio:
             stt_response = client.speech_to_text.transcribe(
                 file=audio,
                 model="saaras:v4",
-                language_code="bn-IN",
+                language_code=input_language,
                 mode="transcribe"
             )
 
@@ -149,7 +154,7 @@ def voice_bot(audio_path, document_path, document_language, response_language):
             "hi-IN": "simple, everyday Hindi"
         }[response_language]
 
-        # Step 3: Reason over the actual extracted document text.
+        # Step 3: Generate practical guidance using the document text.
         chat_response = client.chat.completions(
             messages=[
                 {
@@ -161,6 +166,7 @@ understand government forms and public services.
 Reply in {language_name}.
 
 Use short, clear sentences and numbered action steps.
+Keep the response concise and easy to understand.
 
 IMPORTANT RULES:
 - Treat the extracted document as the source of information
@@ -209,22 +215,6 @@ Give practical next steps without inventing missing information.
         if not answer:
             raise RuntimeError("The assistant returned an empty answer.")
 
-        # Step 4: Convert the answer into speech.
-        tts_response = client.text_to_speech.convert(
-            text=answer,
-            language_code=response_language,
-            model="bulbul:v3",
-            speaker="roopa"
-        )
-
-        audio_data = base64.b64decode(tts_response.audios[0])
-
-        with tempfile.NamedTemporaryFile(
-            suffix=".wav", delete=False
-        ) as output_file:
-            output_file.write(audio_data)
-            output_path = output_file.name
-
         transcript_label = (
             "আপনার বলা কথা / Your spoken situation"
         )
@@ -236,6 +226,33 @@ Give practical next steps without inventing missing information.
             f"{transcript_label}\n{question}\n\n"
             f"{answer_label}\n{answer}"
         )
+
+        # Step 4: Generate speech separately.
+        # If TTS fails, preserve the written guidance.
+        output_path = None
+
+        try:
+            tts_response = client.text_to_speech.convert(
+                text=answer,
+                language_code=response_language,
+                model="bulbul:v3",
+                speaker="roopa"
+            )
+
+            audio_data = base64.b64decode(tts_response.audios[0])
+
+            with tempfile.NamedTemporaryFile(
+                suffix=".wav", delete=False
+            ) as output_file:
+                output_file.write(audio_data)
+                output_path = output_file.name
+
+        except Exception as tts_error:
+            result += (
+                "\n\nVoice generation failed. "
+                "The written guidance is still available.\n"
+                f"Details: {tts_error}"
+            )
 
         return result, form_text[:12000], output_path
 
@@ -257,8 +274,8 @@ with gr.Blocks(title="Shohoj | সহজ") as demo:
         সরকারি ফর্ম বুঝতে অসুবিধা হচ্ছে?
         / Having trouble understanding a government form?
 
-        ফর্ম আপলোড করুন, নিজের পরিস্থিতি বাংলায় বলুন।
-        / Upload the form and describe your situation in Bengali.
+        ফর্ম আপলোড করুন, নিজের পরিস্থিতি বলুন।
+        / Upload the form and describe your situation.
         """
     )
 
@@ -293,8 +310,11 @@ with gr.Blocks(title="Shohoj | সহজ") as demo:
         ## ২. আপনার পরিস্থিতি বলুন
         ## 2. Describe your situation
 
-        মাইক্রোফোনে বাংলায় বলুন আপনার কী সাহায্য প্রয়োজন।
-        / Record in Bengali and explain what help you need.
+        মাইক্রোফোনে আপনার কী সাহায্য প্রয়োজন তা বলুন।
+        / Record your voice and explain what help you need.
+
+        Keep your recording under 30 seconds.
+        / আপনার রেকর্ডিং ৩০ সেকেন্ডের কম রাখুন।
         """
     )
 
@@ -302,6 +322,15 @@ with gr.Blocks(title="Shohoj | সহজ") as demo:
         sources=["microphone", "upload"],
         type="filepath",
         label="আপনার কথা রেকর্ড করুন / Record your voice"
+    )
+
+    input_language = gr.Dropdown(
+        choices=[
+            ("বাংলা / Bengali", "bn-IN"),
+            ("হিন্দি / Hindi", "hi-IN")
+        ],
+        value="bn-IN",
+        label="আপনি কোন ভাষায় বলবেন? / Spoken language"
     )
 
     response_language = gr.Dropdown(
@@ -339,6 +368,7 @@ with gr.Blocks(title="Shohoj | সহজ") as demo:
             audio_input,
             document_input,
             document_language,
+            input_language,
             response_language
         ],
         outputs=[
@@ -360,5 +390,6 @@ with gr.Blocks(title="Shohoj | সহজ") as demo:
         / Verify uncertain information with the relevant government office.
         """
     )
+
 
 demo.launch()
